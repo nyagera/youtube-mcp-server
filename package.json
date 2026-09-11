@@ -3,9 +3,6 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "scripts": {
-    "build": "tsc"
-  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
     "googleapis": "^144.0.0",
