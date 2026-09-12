@@ -3,16 +3,17 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 import { getYouTubeClient, getAnalyticsClient } from "../lib/google.js";
+import { verifyToken } from "../lib/oauth.js";
 
 /**
- * Vérifie le bearer token envoyé par le client MCP (ChatGPT/Claude)
- * contre le secret MCP_AUTH_TOKEN configuré dans Vercel.
+ * Vérifie le bearer token OAuth envoyé par le client MCP (ChatGPT/Claude).
+ * Le token doit être un access token signé émis par /api/oauth/token.
  */
 function isAuthorized(req: VercelRequest): boolean {
   const header = req.headers["authorization"];
   if (!header || Array.isArray(header)) return false;
   const token = header.replace(/^Bearer\s+/i, "");
-  return Boolean(process.env.MCP_AUTH_TOKEN) && token === process.env.MCP_AUTH_TOKEN;
+  return Boolean(verifyToken(token, "access"));
 }
 
 function buildServer() {
@@ -145,6 +146,11 @@ function buildServer() {
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!isAuthorized(req)) {
+    const origin = `https://${req.headers.host}`;
+    res.setHeader(
+      "WWW-Authenticate",
+      `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource"`
+    );
     res.status(401).json({ error: "Unauthorized: missing or invalid bearer token" });
     return;
   }
