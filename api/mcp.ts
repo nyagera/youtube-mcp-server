@@ -141,6 +141,62 @@ function buildServer() {
     }
   );
 
+  server.tool(
+    "get_search_keywords",
+    "Récupère les mots-clés de recherche YouTube qui apportent des vues, classés du plus au moins performant. " +
+      "Utilise la dimension insightTrafficSourceDetail filtrée sur insightTrafficSourceType==YT_SEARCH " +
+      "(seul cas où ce détail contient de vrais termes de recherche, pas des titres de vidéos suggérées). " +
+      "Peut être filtré par vidéo précise et/ou par pays, et croisé avec le temps (dimension 'day') pour voir " +
+      "l'évolution d'un mot-clé. Attention : ces données ont un délai de traitement de 24 à 72h côté Google, " +
+      "les vidéos très récentes n'auront donc pas encore de détail exploitable même si les vues brutes sont à jour.",
+    {
+      startDate: z.string().describe("Date de début au format YYYY-MM-DD"),
+      endDate: z.string().describe("Date de fin au format YYYY-MM-DD"),
+      videoId: z
+        .string()
+        .optional()
+        .describe("Limiter aux mots-clés d'une vidéo précise (optionnel)"),
+      country: z
+        .string()
+        .optional()
+        .describe("Code pays ISO 3166-1 alpha-2 (ex: 'FR', 'ES') pour filtrer par zone géographique (optionnel)"),
+      byDay: z
+        .boolean()
+        .default(false)
+        .describe("Si true, ajoute la dimension 'day' pour voir l'évolution de chaque mot-clé dans le temps"),
+      maxResults: z
+        .number()
+        .min(1)
+        .max(200)
+        .default(25)
+        .describe("Nombre maximum de mots-clés à retourner (défaut 25)"),
+    },
+    async ({ startDate, endDate, videoId, country, byDay, maxResults }) => {
+      const analytics = getAnalyticsClient();
+
+      const dimensions = byDay
+        ? "day,insightTrafficSourceDetail"
+        : "insightTrafficSourceDetail";
+
+      const filterParts = ["insightTrafficSourceType==YT_SEARCH"];
+      if (videoId) filterParts.push(`video==${videoId}`);
+      if (country) filterParts.push(`country==${country}`);
+
+      const result = await analytics.reports.query({
+        ids: "channel==MINE",
+        startDate,
+        endDate,
+        metrics: "views",
+        dimensions,
+        filters: filterParts.join(";"),
+        sort: "-views",
+        maxResults,
+      });
+
+      return { content: [{ type: "text", text: JSON.stringify(result.data, null, 2) }] };
+    }
+  );
+
   return server;
 }
 
