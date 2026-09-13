@@ -197,6 +197,86 @@ function buildServer() {
     }
   );
 
+  server.tool(
+    "get_search_traffic_trend",
+    "Récupère l'évolution jour par jour du nombre de vues venant de la recherche YouTube (toutes requêtes confondues). " +
+      "Utile pour voir si le trafic 'recherche' global est en hausse ou en baisse dans le temps. " +
+      "Note : l'API YouTube Analytics ne permet pas de croiser la dimension 'day' avec le détail des mots-clés " +
+      "(insightTrafficSourceDetail) — cet outil montre donc la tendance agrégée, pas mot-clé par mot-clé. " +
+      "Pour ça, utilise get_search_keywords avec un videoId précis à la place. " +
+      "Attention : délai de traitement de 24 à 72h côté Google.",
+    {
+      startDate: z.string().describe("Date de début au format YYYY-MM-DD"),
+      endDate: z.string().describe("Date de fin au format YYYY-MM-DD"),
+      videoId: z
+        .string()
+        .optional()
+        .describe("Limiter à une vidéo précise (optionnel)"),
+      country: z
+        .string()
+        .optional()
+        .describe("Code pays ISO 3166-1 alpha-2 (ex: 'FR', 'ES') pour filtrer par zone géographique (optionnel)"),
+    },
+    async ({ startDate, endDate, videoId, country }) => {
+      const analytics = getAnalyticsClient();
+
+      const filterParts = ["insightTrafficSourceType==YT_SEARCH"];
+      if (videoId) filterParts.push(`video==${videoId}`);
+      if (country) filterParts.push(`country==${country}`);
+
+      const result = await analytics.reports.query({
+        ids: "channel==MINE",
+        startDate,
+        endDate,
+        metrics: "views",
+        dimensions: "day",
+        filters: filterParts.join(";"),
+        sort: "day",
+      });
+
+      return { content: [{ type: "text", text: JSON.stringify(result.data, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "get_audience_demographics",
+    "Récupère la répartition démographique de ton audience YouTube : pourcentage de vues par tranche d'âge " +
+      "(13-17, 18-24, 25-34, 35-44, 45-54, 55-64, 65+) et par genre (masculin/féminin). " +
+      "Peut être limité à une vidéo précise et/ou un pays. " +
+      "Attention : ces données ont aussi un délai de traitement de 24 à 72h côté Google.",
+    {
+      startDate: z.string().describe("Date de début au format YYYY-MM-DD"),
+      endDate: z.string().describe("Date de fin au format YYYY-MM-DD"),
+      videoId: z
+        .string()
+        .optional()
+        .describe("Limiter la démographie à une vidéo précise (optionnel)"),
+      country: z
+        .string()
+        .optional()
+        .describe("Code pays ISO 3166-1 alpha-2 (ex: 'FR', 'ES') pour filtrer par zone géographique (optionnel)"),
+    },
+    async ({ startDate, endDate, videoId, country }) => {
+      const analytics = getAnalyticsClient();
+
+      const filterParts: string[] = [];
+      if (videoId) filterParts.push(`video==${videoId}`);
+      if (country) filterParts.push(`country==${country}`);
+
+      const result = await analytics.reports.query({
+        ids: "channel==MINE",
+        startDate,
+        endDate,
+        metrics: "viewerPercentage",
+        dimensions: "ageGroup,gender",
+        filters: filterParts.length > 0 ? filterParts.join(";") : undefined,
+        sort: "-viewerPercentage",
+      });
+
+      return { content: [{ type: "text", text: JSON.stringify(result.data, null, 2) }] };
+    }
+  );
+
   return server;
 }
 
