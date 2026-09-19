@@ -16,6 +16,36 @@ function isAuthorized(req: VercelRequest): boolean {
   return Boolean(verifyToken(token, "access"));
 }
 
+function parseIso8601DurationToSeconds(duration?: string | null): number | null {
+  if (!duration) return null;
+
+  const match = duration.match(
+    /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?$/
+  );
+  if (!match) return null;
+
+  const [, days = "0", hours = "0", minutes = "0", seconds = "0"] = match;
+  return (
+    Number(days) * 86400 +
+    Number(hours) * 3600 +
+    Number(minutes) * 60 +
+    Number(seconds)
+  );
+}
+
+function formatTimestamp(totalSeconds: number): string {
+  const roundedSeconds = Math.max(0, Math.round(totalSeconds));
+  const hours = Math.floor(roundedSeconds / 3600);
+  const minutes = Math.floor((roundedSeconds % 3600) / 60);
+  const seconds = roundedSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  }
+
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
 function buildServer() {
   const server = new McpServer({
     name: "youtube-mcp-server",
@@ -112,6 +142,106 @@ function buildServer() {
       });
 
       return { content: [{ type: "text", text: JSON.stringify(result.data, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "get_audience_retention",
+    "Récupère la courbe de rétention d'une vidéo précise sur une période donnée. " +
+      "Renvoie les points de rétention absolue et relative, leur position dans la vidéo, " +
+      "leur timestamp calculé et les dix plus fortes baisses entre deux segments. " +
+      "YouTube fournit normalement jusqu'à 100 segments proportionnels et n'accepte " +
+      "qu'une seule vidéo par requête. Les données peuvent avoir un délai de 24 à 72h.",
+    {
+      videoId: z.string().min(1).describe("L'identifiant de la vidéo YouTube"),
+      startDate: z.string().describe("Date de début au format YYYY-MM-DD"),
+      endDate: z.string().describe("Date de fin au format YYYY-MM-DD"),
+    },
+    async ({ videoId, startDate, endDate }) => {
+      const analytics = getAnalyticsClient();
+      const youtube = getYouTubeClient();
+
+      const [retentionResult, videoResult] = await Promise.all([
+        analytics.reports.query({
+          ids: "channel==MINE",
+          startDate,
+          endDate,
+          metrics: "audienceWatchRatio,relativeRetentionPerformance",
+          dimensions: "elapsedVideoTimeRatio",
+          filters: `video==${videoId}`,
+        }),
+        youtube.videos.list({
+          part: ["snippet", "contentDetails"],
+          id: [videoId],
+        }),
+      ]);
+
+      const video = videoResult.data.items?.[0];
+      const durationSeconds = parseIso8601DurationToSeconds(
+        video?.contentDetails?.duration
+      );
+
+      const points = (retentionResult.data.rows ?? [])
+        .map((row) => {
+          const elapsedVideoTimeRatio = Number(row[0]);
+          const audienceWatchRatio = Number(row[1]);
+          const relativeRetentionPerformance = Number(row[2]);
+          const elapsedSeconds =
+            durationSeconds === null
+              ? null
+              : elapsedVideoTimeRatio * durationSeconds;
+
+          return {
+            elapsedVideoTimeRatio,
+            elapsedPercentage: elapsedVideoTimeRatio * 100,
+            elapsedSeconds,
+            timestamp:
+              elapsedSeconds === null ? null : formatTimestamp(elapsedSeconds),
+            audienceWatchRatio,
+            audiencePercentage: audienceWatchRatio * 100,
+            relativeRetentionPerformance,
+          };
+        })
+        .sort(
+          (a, b) => a.elapsedVideoTimeRatio - b.elapsedVideoTimeRatio
+        );
+
+      const largestDrops = points
+        .slice(1)
+        .map((point, index) => ({
+          ...point,
+          previousAudiencePercentage: points[index].audiencePercentage,
+          changePercentagePoints:
+            point.audiencePercentage - points[index].audiencePercentage,
+        }))
+        .filter((point) => point.changePercentagePoints < 0)
+        .sort((a, b) => a.changePercentagePoints - b.changePercentagePoints)
+        .slice(0, 10);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                video: {
+                  videoId,
+                  title: video?.snippet?.title ?? null,
+                  publishedAt: video?.snippet?.publishedAt ?? null,
+                  isoDuration: video?.contentDetails?.duration ?? null,
+                  durationSeconds,
+                },
+                period: { startDate, endDate },
+                pointCount: points.length,
+                points,
+                largestDrops,
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
     }
   );
 
